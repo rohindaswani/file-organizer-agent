@@ -6,19 +6,7 @@ import shutil
 
 client = anthropic.Anthropic()
 
-# Global flag for dry-run mode
 DRY_RUN = False
-
-# =============================================================================
-# STEP 2: DEFINE THE TOOLS
-# =============================================================================
-# Tools are defined as a list of dictionaries. Each tool has:
-#   - name: What Claude will call it
-#   - description: Helps Claude understand WHEN to use it
-#   - input_schema: JSON Schema defining the parameters
-#
-# Think of this as the "API contract" you're giving Claude.
-# =============================================================================
 
 tools = [
     {
@@ -69,17 +57,8 @@ tools = [
     }
 ]
 
-# =============================================================================
-# STEP 3: IMPLEMENT TOOL HANDLERS
-# =============================================================================
-# These are regular Python functions. Claude doesn't run them directly -
-# Claude just tells us which tool to call and with what arguments.
-# We run the function and send the result back to Claude.
-# =============================================================================
-
 
 def list_directory(path: str) -> str:
-    """List contents of a directory with file info."""
     try:
         entries = []
         for entry in os.listdir(path):
@@ -96,11 +75,9 @@ def list_directory(path: str) -> str:
 
 
 def move_file(source: str, destination: str) -> str:
-    """Move a file to a new location."""
     if DRY_RUN:
         return f"[DRY-RUN] Would move {source} to {destination}"
     try:
-        # Create destination directory if it doesn't exist
         dest_dir = os.path.dirname(destination)
         if dest_dir and not os.path.exists(dest_dir):
             os.makedirs(dest_dir)
@@ -111,7 +88,6 @@ def move_file(source: str, destination: str) -> str:
 
 
 def create_folder(path: str) -> str:
-    """Create a new folder."""
     if DRY_RUN:
         return f"[DRY-RUN] Would create folder: {path}"
     try:
@@ -122,10 +98,6 @@ def create_folder(path: str) -> str:
 
 
 def process_tool_call(tool_name: str, tool_input: dict) -> str:
-    """
-    Route a tool call to the right function.
-    This is the bridge between Claude's requests and our actual code.
-    """
     if tool_name == "list_directory":
         return list_directory(tool_input["path"])
     elif tool_name == "move_file":
@@ -136,23 +108,7 @@ def process_tool_call(tool_name: str, tool_input: dict) -> str:
         return f"Unknown tool: {tool_name}"
 
 
-# =============================================================================
-# STEP 4: THE AGENTIC LOOP
-# =============================================================================
-# This is the heart of an agent. The loop:
-#   1. Send message to Claude with tools available
-#   2. Check stop_reason:
-#      - "end_turn" → Claude is done, exit loop
-#      - "tool_use" → Claude wants to use a tool
-#   3. If tool_use: execute tool, send result back, continue loop
-#
-# The key insight: Claude doesn't execute tools. It REQUESTS them.
-# We execute, then tell Claude what happened.
-# =============================================================================
-
-
 def run_agent(user_request: str, dry_run: bool = False):
-    """Run the file organizer agent."""
     global DRY_RUN
     DRY_RUN = dry_run
 
@@ -161,11 +117,8 @@ def run_agent(user_request: str, dry_run: bool = False):
     print(f"User Request: {user_request}{mode_str}")
     print(f"{'='*60}\n")
 
-    # Conversation history - this grows as we go
     messages = [{"role": "user", "content": user_request}]
 
-    # System prompt guides the agent's behavior
-    # In dry-run mode, tell the agent to go ahead and show the full plan
     if dry_run:
         system_prompt = """You are a helpful file organizer agent in PREVIEW MODE.
 This is a dry-run - no files will actually be moved or folders created.
@@ -184,9 +137,7 @@ Since this is a preview, proceed with the full organization plan to show the use
 
 Always explain your reasoning. Be conservative - ask before moving files."""
 
-    # THE AGENTIC LOOP
     while True:
-        # 1. Call Claude with our messages and tools
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -195,50 +146,35 @@ Always explain your reasoning. Be conservative - ask before moving files."""
             messages=messages
         )
 
-        # 2. Print any text Claude returns
         for block in response.content:
             if hasattr(block, "text"):
                 print(f"Agent: {block.text}\n")
 
-        # 3. Check WHY Claude stopped
-        #    - "end_turn" means Claude is done talking
-        #    - "tool_use" means Claude wants to use a tool
         if response.stop_reason == "end_turn":
             print("[Agent finished]")
             break
 
-        # 4. If Claude wants to use tools, process them
         if response.stop_reason == "tool_use":
-            # Add Claude's response to conversation history
             messages.append({"role": "assistant", "content": response.content})
 
-            # Execute each tool Claude requested
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
                     print(f"[Tool Call] {block.name}")
                     print(f"[Input] {json.dumps(block.input, indent=2)}")
 
-                    # Run the tool and get result
                     result = process_tool_call(block.name, block.input)
                     print(f"[Result] {result}\n")
 
-                    # Format result for Claude
                     tool_results.append({
                         "type": "tool_result",
-                        "tool_use_id": block.id,  # Must match the tool_use id!
+                        "tool_use_id": block.id,
                         "content": result
                     })
 
-            # Send tool results back to Claude
             messages.append({"role": "user", "content": tool_results})
 
-            # Loop continues - Claude will see the results and decide what's next
 
-
-# =============================================================================
-# MAIN - Run the agent
-# =============================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="File Organizer Agent")
     parser.add_argument("directory", help="Directory to organize")
